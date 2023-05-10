@@ -1,33 +1,41 @@
 #![allow(dead_code, unused)]
 
-use vulkano::VulkanLibrary;
-use vulkano::swapchain::{Swapchain, SwapchainCreateInfo, SwapchainCreationError, Surface};
-use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags};
-use vulkano::device::physical::PhysicalDeviceType;
-use vulkano::instance::{Instance, InstanceCreateInfo};
-use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
+use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
+use vulkano::device::physical::PhysicalDeviceType;
+use vulkano::device::{
+    Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
+};
 use vulkano::format::Format;
-use vulkano::render_pass::{RenderPass, Subpass};
-use vulkano::pipeline::GraphicsPipeline;
-use vulkano::pipeline::graphics::vertex_input::Vertex;
-use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
-use vulkano::pipeline::graphics::viewport::ViewportState;
-use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
-use vulkano::pipeline::graphics::rasterization::{RasterizationState, CullMode};
-use vulkano::pipeline::graphics::color_blend::{ColorBlendState, AttachmentBlend, BlendOp, BlendFactor};
-use vulkano::buffer::BufferContents;
-use vulkano::image::{ImmutableImage, ImageDimensions};
 use vulkano::image::view::ImageView;
+use vulkano::image::{ImageAccess, SwapchainImage};
+use vulkano::instance::{Instance, InstanceCreateInfo};
+use vulkano::memory::allocator::MemoryUsage;
+use vulkano::memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator};
+use vulkano::pipeline::graphics::color_blend::{
+    AttachmentBlend, BlendFactor, BlendOp, ColorBlendState,
+};
+use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
+use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
+use vulkano::pipeline::graphics::rasterization::{CullMode, RasterizationState};
+use vulkano::pipeline::graphics::vertex_input::Vertex;
+use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
+use vulkano::pipeline::GraphicsPipeline;
+use vulkano::render_pass::{Framebuffer, RenderPass, Subpass};
+use vulkano::swapchain::{
+    Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainCreationError,
+};
+use vulkano::VulkanLibrary;
 
-use winit::window::{Window, WindowBuilder};
 use winit::event_loop::EventLoop;
+use winit::window::{Window, WindowBuilder};
 
-use vulkano_win::{VkSurfaceBuild, required_extensions};
+use vulkano_win::{required_extensions, VkSurfaceBuild};
 
-use std::sync::Arc;
 use std::io::Cursor;
+use std::sync::Arc;
 
 mod shaders;
 use shaders::*;
@@ -44,7 +52,8 @@ pub struct Renderer {
     deferred_pipeline: PipelineInfo,
     ambient_pipeline: PipelineInfo,
     point_pipeline: PipelineInfo,
-    directional_pipeline: PipelineInfo
+    directional_pipeline: PipelineInfo,
+    screen_vertices: Arc<Subbuffer<[BasicVertex2D]>>,
 }
 
 impl Renderer {
@@ -61,7 +70,7 @@ impl Renderer {
                     enumerate_portability: true, // allows porting to macOS
                     max_api_version: Some(vulkano::Version::V1_1),
                     ..Default::default()
-                }
+                },
             )
             .unwrap()
         };
@@ -81,7 +90,8 @@ impl Renderer {
             .unwrap()
             .filter(|device| device.supported_extensions().contains(&device_extensions))
             .filter_map(|device| {
-                device.queue_family_properties()
+                device
+                    .queue_family_properties()
                     .iter()
                     .enumerate()
                     .position(|(i, q)| {
@@ -99,7 +109,7 @@ impl Renderer {
                     PhysicalDeviceType::VirtualGpu => 2,
                     PhysicalDeviceType::Cpu => 3,
                     PhysicalDeviceType::Other => 4,
-                    _ => 5
+                    _ => 5,
                 }
             })
             .expect("No suitable GPU found.");
@@ -113,7 +123,7 @@ impl Renderer {
                     ..Default::default()
                 }],
                 ..Default::default()
-            }
+            },
         )
         .unwrap();
 
@@ -133,7 +143,7 @@ impl Renderer {
                     .physical_device()
                     .surface_formats(&surface, Default::default())
                     .unwrap()[0]
-                    .0
+                    .0,
             );
 
             let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
@@ -149,14 +159,14 @@ impl Renderer {
                     image_format,
                     image_extent,
                     ..Default::default()
-                }
+                },
             )
             .unwrap()
         };
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
         let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
-        let command_buffer_allocator = 
+        let command_buffer_allocator =
             StandardCommandBufferAllocator::new(device.clone(), Default::default());
 
         let deferred_vert = deferred_vert::load(device.clone()).unwrap();
@@ -208,7 +218,7 @@ impl Renderer {
         let lighting_pass = Subpass::from(render_pass.clone(), 1).unwrap();
 
         let deferred_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(Vertex2D::per_vertex())
+            .vertex_input_state(ColorVertex2D::per_vertex())
             .vertex_shader(deferred_vert.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
@@ -233,9 +243,9 @@ impl Renderer {
                         color_destination: BlendFactor::One,
                         alpha_op: BlendOp::Add,
                         alpha_source: BlendFactor::One,
-                        alpha_destination: BlendFactor::One
-                    }
-                )
+                        alpha_destination: BlendFactor::One,
+                    },
+                ),
             )
             .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
             .render_pass(lighting_pass.clone())
@@ -256,9 +266,9 @@ impl Renderer {
                         color_destination: BlendFactor::One,
                         alpha_op: BlendOp::Add,
                         alpha_source: BlendFactor::One,
-                        alpha_destination: BlendFactor::One
-                    }
-                )
+                        alpha_destination: BlendFactor::One,
+                    },
+                ),
             )
             .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
             .render_pass(lighting_pass.clone())
@@ -279,9 +289,9 @@ impl Renderer {
                         color_destination: BlendFactor::One,
                         alpha_op: BlendOp::Add,
                         alpha_source: BlendFactor::One,
-                        alpha_destination: BlendFactor::One
-                    }
-                )
+                        alpha_destination: BlendFactor::One,
+                    },
+                ),
             )
             .rasterization_state(RasterizationState::new().cull_mode(CullMode::Back))
             .render_pass(lighting_pass.clone())
@@ -291,26 +301,59 @@ impl Renderer {
         let deferred_pipeline = PipelineInfo {
             vert_path: "src/application/renderer/shaders/shaders/deferred.vert".to_string(),
             frag_path: "src/application/renderer/shaders/shaders/deferred.frag".to_string(),
-            pipeline: deferred_pipeline
+            pipeline: deferred_pipeline,
         };
 
         let ambient_pipeline = PipelineInfo {
             vert_path: "src/application/renderer/shaders/shaders/ambient.vert".to_string(),
             frag_path: "src/application/renderer/shaders/shaders/ambient.frag".to_string(),
-            pipeline: ambient_pipeline
+            pipeline: ambient_pipeline,
         };
 
         let point_pipeline = PipelineInfo {
             vert_path: "src/application/renderer/shaders/shaders/point.vert".to_string(),
             frag_path: "src/application/renderer/shaders/shaders/point.frag".to_string(),
-            pipeline: point_pipeline
+            pipeline: point_pipeline,
         };
 
         let directional_pipeline = PipelineInfo {
             vert_path: "src/application/renderer/shaders/shaders/directional.vert".to_string(),
             frag_path: "src/application/renderer/shaders/shaders/directional.frag".to_string(),
-            pipeline: directional_pipeline
+            pipeline: directional_pipeline,
         };
+
+        let screen_vertices = Arc::new(
+            Buffer::from_iter(
+                &memory_allocator,
+                BufferCreateInfo {
+                    usage: BufferUsage::VERTEX_BUFFER,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    usage: MemoryUsage::Upload,
+                    ..Default::default()
+                },
+                BasicVertex2D::screen_vertices().iter().cloned(),
+            )
+            .unwrap(),
+        );
+
+        let mut viewport = Viewport {
+            origin: [0.0, 0.0],
+            dimensions: [0.0, 0.0],
+            depth_range: 0.0..1.0,
+        };
+
+        let framebuffers = Renderer::window_size_dependent_setup(
+            &memory_allocator,
+            &images,
+            render_pass.clone(),
+            &mut viewport,
+        );
+
+        let commands: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>> = None;
+        let image_index = 0;
+        let acquire_future: Option<SwapchainAcquireFuture> = None;
 
         Renderer {
             surface,
@@ -324,12 +367,14 @@ impl Renderer {
             deferred_pipeline,
             ambient_pipeline,
             point_pipeline,
-            directional_pipeline
+            directional_pipeline,
+            screen_vertices,
         }
     }
 
     pub fn recreate_swapchain(&mut self) {
-        let window = self.surface
+        let window = self
+            .surface
             .object()
             .unwrap()
             .downcast_ref::<Window>()
@@ -338,16 +383,42 @@ impl Renderer {
 
         let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
 
-        let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo{
+        let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
             image_extent,
             ..self.swapchain.create_info()
         }) {
             Ok(r) => r,
             Err(SwapchainCreationError::ImageExtentNotSupported { .. }) => return,
-            Err(err) => panic!("Failed to recreate swapchain: {:?}", err)
+            Err(err) => panic!("Failed to recreate swapchain: {:?}", err),
         };
 
         self.swapchain = new_swapchain;
+    }
+
+    fn window_size_dependent_setup(
+        memory_allocator: &StandardMemoryAllocator,
+        images: &[Arc<SwapchainImage>],
+        render_pass: Arc<RenderPass>,
+        viewport: &mut Viewport,
+    ) -> Vec<Arc<Framebuffer>> {
+        let dimensions = images[0].dimensions().width_height();
+        viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
+
+        images
+            .iter()
+            .map(|image| {
+                println!("{:?}", image);
+                let view = ImageView::new_default(image.clone()).unwrap();
+                Framebuffer::new(
+                    render_pass.clone(),
+                    vulkano::render_pass::FramebufferCreateInfo {
+                        attachments: vec![view],
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+            })
+            .collect::<Vec<Arc<Framebuffer>>>()
     }
 }
 
@@ -357,12 +428,46 @@ struct Vertex2D {
     #[format(R32G32B32_SFLOAT)]
     position: [f32; 3],
     #[format(R32G32_SFLOAT)]
-    uv: [f32; 2]
+    uv: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, BufferContents, Vertex)]
+struct BasicVertex2D {
+    #[format(R32G32_SFLOAT)]
+    position: [f32; 2],
+}
+
+impl BasicVertex2D {
+    pub fn screen_vertices() -> [BasicVertex2D; 6] {
+        [
+            BasicVertex2D {
+                position: [-1.0, -1.0],
+            },
+            BasicVertex2D {
+                position: [-1.0, 1.0],
+            },
+            BasicVertex2D {
+                position: [1.0, 1.0],
+            },
+            BasicVertex2D {
+                position: [-1.0, -1.0],
+            },
+            BasicVertex2D {
+                position: [1.0, 1.0],
+            },
+            BasicVertex2D {
+                position: [1.0, -1.0],
+            },
+        ]
+    }
 }
 
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
-struct BasicVertex2D {
-    #[format(R32G32_SFLOAT)]
-    position: [f32; 2]
+struct ColorVertex2D {
+    #[format(R32G32B32_SFLOAT)]
+    position: [f32; 3],
+    #[format(R32G32B32_SFLOAT)]
+    color: [f32; 3],
 }

@@ -5,7 +5,7 @@ use vulkano::pipeline::graphics::GraphicsPipeline;
 pub struct PipelineInfo {
     pub vert_path: String,
     pub frag_path: String,
-    pub pipeline: Arc<GraphicsPipeline>
+    pub pipeline: Arc<GraphicsPipeline>,
 }
 
 pub mod deferred_vert {
