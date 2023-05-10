@@ -1,5 +1,9 @@
 #![allow(non_snake_case)]
 
+mod application;
+use application::Application;
+
 fn main() {
-    println!("Hello, world!");
+    let app = Application::new();
+    app.run();
 }
