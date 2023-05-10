@@ -41,10 +41,10 @@ pub struct Renderer {
     descriptor_set_allocator: StandardDescriptorSetAllocator,
     command_buffer_allocator: StandardCommandBufferAllocator,
     render_pass: Arc<RenderPass>,
-    deferred_pipeline: Arc<GraphicsPipeline>,
-    ambient_pipeline: Arc<GraphicsPipeline>,
-    point_light_pipeline: Arc<GraphicsPipeline>,
-    directional_light_pipeline: Arc<GraphicsPipeline>
+    deferred_pipeline: PipelineInfo,
+    ambient_pipeline: PipelineInfo,
+    point_pipeline: PipelineInfo,
+    directional_pipeline: PipelineInfo
 }
 
 impl Renderer {
@@ -163,10 +163,10 @@ impl Renderer {
         let deferred_frag = deferred_frag::load(device.clone()).unwrap();
         let ambient_vert = ambient_vert::load(device.clone()).unwrap();
         let ambient_frag = ambient_frag::load(device.clone()).unwrap();
-        let point_light_vert = point_light_vert::load(device.clone()).unwrap();
-        let point_light_frag = point_light_frag::load(device.clone()).unwrap();
-        let directional_light_vert = directional_light_vert::load(device.clone()).unwrap();
-        let directional_light_frag = directional_light_frag::load(device.clone()).unwrap();
+        let point_vert = point_vert::load(device.clone()).unwrap();
+        let point_frag = point_frag::load(device.clone()).unwrap();
+        let directional_vert = directional_vert::load(device.clone()).unwrap();
+        let directional_frag = directional_frag::load(device.clone()).unwrap();
 
         let render_pass = vulkano::ordered_passes_renderpass!(device.clone(),
             attachments: {
@@ -242,12 +242,12 @@ impl Renderer {
             .build(device.clone())
             .unwrap();
 
-        let point_light_pipeline = GraphicsPipeline::start()
+        let point_pipeline = GraphicsPipeline::start()
             .vertex_input_state(BasicVertex2D::per_vertex())
-            .vertex_shader(point_light_vert.entry_point("main").unwrap(), ())
+            .vertex_shader(point_vert.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-            .fragment_shader(point_light_frag.entry_point("main").unwrap(), ())
+            .fragment_shader(point_frag.entry_point("main").unwrap(), ())
             .color_blend_state(
                 ColorBlendState::new(lighting_pass.num_color_attachments()).blend(
                     AttachmentBlend {
@@ -265,12 +265,12 @@ impl Renderer {
             .build(device.clone())
             .unwrap();
 
-        let directional_light_pipeline = GraphicsPipeline::start()
+        let directional_pipeline = GraphicsPipeline::start()
             .vertex_input_state(BasicVertex2D::per_vertex())
-            .vertex_shader(directional_light_vert.entry_point("main").unwrap(), ())
+            .vertex_shader(directional_vert.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
-            .fragment_shader(directional_light_frag.entry_point("main").unwrap(), ())
+            .fragment_shader(directional_frag.entry_point("main").unwrap(), ())
             .color_blend_state(
                 ColorBlendState::new(lighting_pass.num_color_attachments()).blend(
                     AttachmentBlend {
@@ -287,6 +287,30 @@ impl Renderer {
             .render_pass(lighting_pass.clone())
             .build(device.clone())
             .unwrap();
+
+        let deferred_pipeline = PipelineInfo {
+            vert_path: "src/application/renderer/shaders/shaders/deferred.vert".to_string(),
+            frag_path: "src/application/renderer/shaders/shaders/deferred.frag".to_string(),
+            pipeline: deferred_pipeline
+        };
+
+        let ambient_pipeline = PipelineInfo {
+            vert_path: "src/application/renderer/shaders/shaders/ambient.vert".to_string(),
+            frag_path: "src/application/renderer/shaders/shaders/ambient.frag".to_string(),
+            pipeline: ambient_pipeline
+        };
+
+        let point_pipeline = PipelineInfo {
+            vert_path: "src/application/renderer/shaders/shaders/point.vert".to_string(),
+            frag_path: "src/application/renderer/shaders/shaders/point.frag".to_string(),
+            pipeline: point_pipeline
+        };
+
+        let directional_pipeline = PipelineInfo {
+            vert_path: "src/application/renderer/shaders/shaders/directional.vert".to_string(),
+            frag_path: "src/application/renderer/shaders/shaders/directional.frag".to_string(),
+            pipeline: directional_pipeline
+        };
 
         Renderer {
             surface,
@@ -299,8 +323,8 @@ impl Renderer {
             render_pass,
             deferred_pipeline,
             ambient_pipeline,
-            point_light_pipeline,
-            directional_light_pipeline
+            point_pipeline,
+            directional_pipeline
         }
     }
 
