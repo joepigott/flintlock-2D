@@ -1,22 +1,3 @@
-use nalgebra_glm::{identity, vec3, TMat4, TVec3};
-
-#[derive(Debug, Clone)]
-pub struct VPM {
-    pub view: TMat4<f32>,
-    pub projection: TMat4<f32>,
-    pub camera_pos: TVec3<f32>,
-}
-
-impl VPM {
-    pub fn new() -> VPM {
-        VPM {
-            view: identity(),
-            projection: identity(),
-            camera_pos: vec3(0.0, 0.0, 0.0),
-        }
-    }
-}
-
 pub mod deferred_vert {
     vulkano_shaders::shader! {
         ty: "vertex",

@@ -320,6 +320,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "nalgebra-glm",
+ "png",
  "vulkano",
  "vulkano-shaders",
  "vulkano-win",

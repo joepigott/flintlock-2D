@@ -1,3 +1,5 @@
+#![allow(dead_code, unused)]
+
 use vulkano::VulkanLibrary;
 use vulkano::swapchain::{Swapchain, SwapchainCreateInfo, SwapchainCreationError, Surface};
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags};
@@ -16,6 +18,8 @@ use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
 use vulkano::pipeline::graphics::rasterization::{RasterizationState, CullMode};
 use vulkano::pipeline::graphics::color_blend::{ColorBlendState, AttachmentBlend, BlendOp, BlendFactor};
 use vulkano::buffer::BufferContents;
+use vulkano::image::{ImmutableImage, ImageDimensions};
+use vulkano::image::view::ImageView;
 
 use winit::window::{Window, WindowBuilder};
 use winit::event_loop::EventLoop;
@@ -23,6 +27,7 @@ use winit::event_loop::EventLoop;
 use vulkano_win::{VkSurfaceBuild, required_extensions};
 
 use std::sync::Arc;
+use std::io::Cursor;
 
 mod shaders;
 use shaders::*;
@@ -327,6 +332,8 @@ impl Renderer {
 struct Vertex2D {
     #[format(R32G32B32_SFLOAT)]
     position: [f32; 3],
+    #[format(R32G32_SFLOAT)]
+    uv: [f32; 2]
 }
 
 #[repr(C)]
