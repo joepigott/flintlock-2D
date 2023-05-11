@@ -1,6 +1,6 @@
 #![allow(dead_code, unused)]
 
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
@@ -10,7 +10,7 @@ use vulkano::device::{
 };
 use vulkano::format::Format;
 use vulkano::image::view::ImageView;
-use vulkano::image::{ImageAccess, SwapchainImage};
+use vulkano::image::{AttachmentImage, ImageAccess, SwapchainImage};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::MemoryUsage;
 use vulkano::memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator};
@@ -20,10 +20,10 @@ use vulkano::pipeline::graphics::color_blend::{
 use vulkano::pipeline::graphics::depth_stencil::DepthStencilState;
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, RasterizationState};
-use vulkano::pipeline::graphics::vertex_input::Vertex;
+use vulkano::pipeline::graphics::vertex_input::BuffersDefinition;
 use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
 use vulkano::pipeline::GraphicsPipeline;
-use vulkano::render_pass::{Framebuffer, RenderPass, Subpass};
+use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass};
 use vulkano::swapchain::{
     Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainCreationError,
 };
@@ -33,6 +33,8 @@ use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
 
 use vulkano_win::{required_extensions, VkSurfaceBuild};
+
+use bytemuck::{Pod, Zeroable};
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -53,7 +55,18 @@ pub struct Renderer {
     ambient_pipeline: PipelineInfo,
     point_pipeline: PipelineInfo,
     directional_pipeline: PipelineInfo,
-    screen_vertices: Arc<Subbuffer<[BasicVertex2D]>>,
+    model_uniform_buffer: CpuBufferPool<deferred_vert::ty::ModelData>,
+    ambient_buffer: Arc<CpuAccessibleBuffer<ambient_frag::ty::AmbientData>>,
+    point_buffer: CpuBufferPool<point_frag::ty::PointData>,
+    directional_buffer: CpuBufferPool<directional_frag::ty::DirectionalData>,
+    screen_vertices: Arc<CpuAccessibleBuffer<[BasicVertex2D]>>,
+    viewport: Viewport,
+    framebuffers: Vec<Arc<Framebuffer>>,
+    color_buffer: Arc<ImageView<AttachmentImage>>,
+    commands: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
+    image_index: u32,
+    acquire_future: Option<SwapchainAcquireFuture>,
+    render_stage: RenderStage,
 }
 
 impl Renderer {
@@ -85,6 +98,11 @@ impl Renderer {
             ..DeviceExtensions::empty()
         };
 
+        println!("Available devices:");
+        for device in instance.enumerate_physical_devices().unwrap() {
+            println!("\t{}", device.properties().device_name);
+        }
+
         let (physical_device, queue_family_index) = instance
             .enumerate_physical_devices()
             .unwrap()
@@ -96,7 +114,7 @@ impl Renderer {
                     .enumerate()
                     .position(|(i, q)| {
                         // pick the first queue index that can handle graphics
-                        q.queue_flags.contains(QueueFlags::GRAPHICS)
+                        q.queue_flags.graphics
                             && device.surface_support(i as u32, &surface).unwrap_or(false)
                     })
                     .map(|i| (device, i as u32))
@@ -114,6 +132,8 @@ impl Renderer {
             })
             .expect("No suitable GPU found.");
 
+        println!("Using device {}", physical_device.properties().device_name);
+
         let (device, mut queues) = Device::new(
             physical_device,
             DeviceCreateInfo {
@@ -129,14 +149,14 @@ impl Renderer {
 
         let queue = queues.next().unwrap();
 
-        let (mut swapchain, images) = {
+        let (swapchain, images) = {
             let caps = device
                 .physical_device()
                 .surface_capabilities(&surface, Default::default())
                 .unwrap();
 
             let image_usage = caps.supported_usage_flags;
-            let composite_alpha = caps.supported_composite_alpha.into_iter().next().unwrap();
+            let composite_alpha = caps.supported_composite_alpha.iter().next().unwrap();
 
             let image_format = Some(
                 device
@@ -154,10 +174,10 @@ impl Renderer {
                 surface.clone(),
                 SwapchainCreateInfo {
                     min_image_count: caps.min_image_count,
-                    image_usage,
-                    composite_alpha,
                     image_format,
                     image_extent,
+                    image_usage,
+                    composite_alpha,
                     ..Default::default()
                 },
             )
@@ -218,7 +238,7 @@ impl Renderer {
         let lighting_pass = Subpass::from(render_pass.clone(), 1).unwrap();
 
         let deferred_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(ColorVertex2D::per_vertex())
+            .vertex_input_state(BuffersDefinition::new().vertex::<ColorVertex2D>())
             .vertex_shader(deferred_vert.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
@@ -230,7 +250,7 @@ impl Renderer {
             .unwrap();
 
         let ambient_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BasicVertex2D::per_vertex())
+            .vertex_input_state(BuffersDefinition::new().vertex::<BasicVertex2D>())
             .vertex_shader(ambient_vert.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
@@ -253,7 +273,7 @@ impl Renderer {
             .unwrap();
 
         let point_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BasicVertex2D::per_vertex())
+            .vertex_input_state(BuffersDefinition::new().vertex::<BasicVertex2D>())
             .vertex_shader(point_vert.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
@@ -276,7 +296,7 @@ impl Renderer {
             .unwrap();
 
         let directional_pipeline = GraphicsPipeline::start()
-            .vertex_input_state(BasicVertex2D::per_vertex())
+            .vertex_input_state(BuffersDefinition::new().vertex::<BasicVertex2D>())
             .vertex_shader(directional_vert.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState::new())
             .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
@@ -322,21 +342,43 @@ impl Renderer {
             pipeline: directional_pipeline,
         };
 
-        let screen_vertices = Arc::new(
-            Buffer::from_iter(
-                &memory_allocator,
-                BufferCreateInfo {
-                    usage: BufferUsage::VERTEX_BUFFER,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    usage: MemoryUsage::Upload,
-                    ..Default::default()
-                },
-                BasicVertex2D::screen_vertices().iter().cloned(),
-            )
-            .unwrap(),
-        );
+        // buffers
+
+        let model_uniform_buffer: CpuBufferPool<deferred_vert::ty::ModelData> =
+            CpuBufferPool::uniform_buffer(memory_allocator.clone());
+
+        let ambient_buffer = CpuAccessibleBuffer::from_data(
+            &memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            // default ambient light values
+            ambient_frag::ty::AmbientData {
+                color: [1.0, 1.0, 1.0],
+                intensity: 0.1,
+            },
+        )
+        .unwrap();
+
+        let point_buffer: CpuBufferPool<point_frag::ty::PointData> =
+            CpuBufferPool::uniform_buffer(memory_allocator.clone());
+        let directional_buffer: CpuBufferPool<directional_frag::ty::DirectionalData> =
+            CpuBufferPool::uniform_buffer(memory_allocator.clone());
+
+        // screen vertices allow fragment shaders to execute without vertex data
+
+        let screen_vertices = CpuAccessibleBuffer::from_iter(
+            &memory_allocator,
+            BufferUsage {
+                vertex_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            BasicVertex2D::screen_vertices().iter().cloned(),
+        )
+        .unwrap();
 
         let mut viewport = Viewport {
             origin: [0.0, 0.0],
@@ -344,7 +386,7 @@ impl Renderer {
             depth_range: 0.0..1.0,
         };
 
-        let framebuffers = Renderer::window_size_dependent_setup(
+        let (framebuffers, color_buffer) = Renderer::window_size_dependent_setup(
             &memory_allocator,
             &images,
             render_pass.clone(),
@@ -354,6 +396,8 @@ impl Renderer {
         let commands: Option<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>> = None;
         let image_index = 0;
         let acquire_future: Option<SwapchainAcquireFuture> = None;
+
+        let render_stage = RenderStage::Stopped;
 
         Renderer {
             surface,
@@ -368,7 +412,18 @@ impl Renderer {
             ambient_pipeline,
             point_pipeline,
             directional_pipeline,
+            model_uniform_buffer,
+            ambient_buffer,
+            point_buffer,
+            directional_buffer,
             screen_vertices,
+            viewport,
+            framebuffers,
+            color_buffer,
+            commands,
+            image_index,
+            acquire_future,
+            render_stage,
         }
     }
 
@@ -400,43 +455,70 @@ impl Renderer {
         images: &[Arc<SwapchainImage>],
         render_pass: Arc<RenderPass>,
         viewport: &mut Viewport,
-    ) -> Vec<Arc<Framebuffer>> {
+    ) -> (Vec<Arc<Framebuffer>>, Arc<ImageView<AttachmentImage>>) {
         let dimensions = images[0].dimensions().width_height();
         viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
 
-        images
+        let depth_buffer = ImageView::new_default(
+            AttachmentImage::transient(memory_allocator, dimensions, Format::D16_UNORM).unwrap(),
+        )
+        .unwrap();
+
+        let color_buffer = ImageView::new_default(
+            AttachmentImage::transient_input_attachment(
+                memory_allocator,
+                dimensions,
+                Format::A2B10G10R10_UNORM_PACK32,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let framebuffers = images
             .iter()
             .map(|image| {
-                println!("{:?}", image);
                 let view = ImageView::new_default(image.clone()).unwrap();
                 Framebuffer::new(
                     render_pass.clone(),
-                    vulkano::render_pass::FramebufferCreateInfo {
-                        attachments: vec![view],
+                    FramebufferCreateInfo {
+                        attachments: vec![view, color_buffer.clone(), depth_buffer.clone()],
                         ..Default::default()
                     },
                 )
                 .unwrap()
             })
-            .collect::<Vec<Arc<Framebuffer>>>()
+            .collect::<Vec<_>>();
+
+        (framebuffers, color_buffer.clone())
     }
 }
 
-#[repr(C)]
-#[derive(BufferContents, Vertex)]
-struct Vertex2D {
-    #[format(R32G32B32_SFLOAT)]
-    position: [f32; 3],
-    #[format(R32G32_SFLOAT)]
-    uv: [f32; 2],
+// render stage allows renderer to function as state machine
+enum RenderStage {
+    Stopped,
+    Vertex,
+    Ambient,
+    Point,
+    Directional,
+    RedrawNeeded,
 }
 
+// vertex structs are used to define data contained in buffers
+
 #[repr(C)]
-#[derive(Clone, BufferContents, Vertex)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+struct Vertex2D {
+    position: [f32; 3],
+    uv: [f32; 2],
+}
+vulkano::impl_vertex!(Vertex2D, position, uv);
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 struct BasicVertex2D {
-    #[format(R32G32_SFLOAT)]
     position: [f32; 2],
 }
+vulkano::impl_vertex!(BasicVertex2D, position);
 
 impl BasicVertex2D {
     pub fn screen_vertices() -> [BasicVertex2D; 6] {
@@ -464,10 +546,9 @@ impl BasicVertex2D {
 }
 
 #[repr(C)]
-#[derive(BufferContents, Vertex)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 struct ColorVertex2D {
-    #[format(R32G32B32_SFLOAT)]
     position: [f32; 3],
-    #[format(R32G32B32_SFLOAT)]
     color: [f32; 3],
 }
+vulkano::impl_vertex!(ColorVertex2D, position, color);

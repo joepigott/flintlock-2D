@@ -12,6 +12,11 @@ pub mod deferred_vert {
     vulkano_shaders::shader! {
         ty: "vertex",
         path: "src/application/renderer/shaders/shaders/deferred.vert",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Pod, Zeroable)]
+        }
     }
 }
 
@@ -32,7 +37,12 @@ pub mod ambient_vert {
 pub mod ambient_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/application/renderer/shaders/shaders/ambient.frag"
+        path: "src/application/renderer/shaders/shaders/ambient.frag",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Pod, Zeroable)]
+        }
     }
 }
 
@@ -46,7 +56,12 @@ pub mod point_vert {
 pub mod point_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/application/renderer/shaders/shaders/point.frag"
+        path: "src/application/renderer/shaders/shaders/point.frag",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Pod, Zeroable)]
+        }
     }
 }
 
@@ -60,6 +75,11 @@ pub mod directional_vert {
 pub mod directional_frag {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "src/application/renderer/shaders/shaders/directional.frag"
+        path: "src/application/renderer/shaders/shaders/directional.frag",
+        types_meta: {
+            use bytemuck::{Pod, Zeroable};
+
+            #[derive(Clone, Copy, Pod, Zeroable)]
+        }
     }
 }
