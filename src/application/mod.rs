@@ -1,6 +1,8 @@
 mod renderer;
 use renderer::Renderer;
 
+use vulkano::sync::GpuFuture;
+
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 
@@ -21,6 +23,9 @@ impl Application {
     }
 
     pub fn run(mut self) {
+        let mut previous_frame_end =
+            Some(Box::new(vulkano::sync::now(self.renderer.device.clone())) as Box<dyn GpuFuture>);
+
         self.event_loop
             .run(move |event, _, control_flow| match event {
                 Event::WindowEvent {
@@ -35,7 +40,16 @@ impl Application {
                 } => {
                     self.renderer.recreate_swapchain();
                 }
-                Event::RedrawEventsCleared => {}
+                Event::RedrawEventsCleared => {
+                    previous_frame_end
+                        .as_mut()
+                        .take()
+                        .unwrap()
+                        .cleanup_finished();
+
+                    self.renderer.start();
+                    self.renderer.finish(&mut previous_frame_end);
+                }
                 _ => {}
             });
     }

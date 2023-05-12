@@ -1,9 +1,13 @@
 #![allow(dead_code, unused)]
 
-use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool};
+use vulkano::buffer::cpu_pool::CpuBufferPoolSubbuffer;
+use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, SubpassContents,
+};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
+use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{
     Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
@@ -22,16 +26,19 @@ use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::rasterization::{CullMode, RasterizationState};
 use vulkano::pipeline::graphics::vertex_input::BuffersDefinition;
 use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
-use vulkano::pipeline::GraphicsPipeline;
+use vulkano::pipeline::{GraphicsPipeline, Pipeline};
 use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass};
 use vulkano::swapchain::{
-    Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainCreationError,
+    self, AcquireError, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo,
+    SwapchainCreationError, SwapchainPresentInfo,
 };
+use vulkano::sync::GpuFuture;
 use vulkano::VulkanLibrary;
 
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
 
+// VkSurfaceBuild allows winit to build a vulkan surface directly
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 
 use bytemuck::{Pod, Zeroable};
@@ -41,6 +48,22 @@ use std::sync::Arc;
 
 mod shaders;
 use shaders::*;
+
+mod renderables;
+use renderables::lights::*;
+use renderables::quad::*;
+use renderables::triangle::*;
+use renderables::vertices::*;
+
+// render stage allows renderer to function as state machine
+enum RenderStage {
+    Stopped,
+    Vertex,
+    Ambient,
+    Point,
+    Directional,
+    RedrawNeeded,
+}
 
 pub struct Renderer {
     surface: Arc<Surface>,
@@ -70,6 +93,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
+    /// Initializes a new Vulkan program and returns a Renderer instance.
     pub fn new(event_loop: &EventLoop<()>) -> Renderer {
         // vulkan instance. vulkano takes care of most of the configuration
         let instance = {
@@ -183,6 +207,8 @@ impl Renderer {
             )
             .unwrap()
         };
+
+        println!("{}", images.len());
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
         let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
@@ -427,6 +453,355 @@ impl Renderer {
         }
     }
 
+    /// Creates a command buffer and prepares the system for rendering.
+    pub fn start(&mut self) {
+        match self.render_stage {
+            RenderStage::Stopped => {
+                self.render_stage = RenderStage::Vertex;
+            }
+            RenderStage::RedrawNeeded => {
+                self.recreate_swapchain();
+                self.render_stage = RenderStage::Stopped;
+                self.commands = None;
+                return;
+            }
+            _ => {
+                self.render_stage = RenderStage::Stopped;
+                self.commands = None;
+                return;
+            }
+        }
+
+        let (image_index, suboptimal, acquire_future) =
+            match swapchain::acquire_next_image(self.swapchain.clone(), None) {
+                Ok(r) => r,
+                Err(AcquireError::Timeout) => {
+                    panic!("Timeout: \n{:?}", self.swapchain);
+                }
+                Err(AcquireError::OutOfDate) => {
+                    self.recreate_swapchain();
+                    return;
+                }
+                Err(err) => panic!("{:?}", err),
+            };
+
+        if suboptimal {
+            self.recreate_swapchain();
+            return;
+        }
+
+        let clear_values = vec![
+            Some([0.15, 0.15, 0.15, 1.0].into()),
+            Some([0.15, 0.15, 0.15, 1.0].into()),
+            Some(1.0.into()),
+        ];
+
+        let mut commands = AutoCommandBufferBuilder::primary(
+            &self.command_buffer_allocator,
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )
+        .unwrap();
+
+        commands
+            .begin_render_pass(
+                vulkano::command_buffer::RenderPassBeginInfo {
+                    clear_values,
+                    ..vulkano::command_buffer::RenderPassBeginInfo::framebuffer(
+                        self.framebuffers[image_index as usize].clone(),
+                    )
+                },
+                SubpassContents::Inline,
+            )
+            .unwrap();
+
+        self.commands = Some(commands);
+        self.image_index = image_index;
+        self.acquire_future = Some(acquire_future);
+    }
+
+    pub fn draw(&mut self, model: &dyn renderables::Renderable) {
+        match self.render_stage {
+            RenderStage::Vertex => {}
+            RenderStage::RedrawNeeded => {
+                self.recreate_swapchain();
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+            _ => {
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+        }
+
+        let model_subbuffer = {
+            let model_mat = model.matrix();
+
+            let uniform_data = deferred_vert::ty::ModelData {
+                mat: model_mat.into(),
+            };
+
+            self.model_uniform_buffer.from_data(uniform_data).unwrap()
+        };
+
+        let model_layout = self
+            .deferred_pipeline
+            .pipeline
+            .layout()
+            .set_layouts()
+            .get(1)
+            .unwrap();
+        let model_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            model_layout.clone(),
+            [WriteDescriptorSet::buffer(0, model_subbuffer.clone())],
+        )
+        .unwrap();
+
+        let vertex_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                vertex_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            model.vertices().iter().cloned(),
+        )
+        .unwrap();
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            .set_viewport(0, [self.viewport.clone()])
+            .bind_pipeline_graphics(self.deferred_pipeline.pipeline.clone())
+            .bind_descriptor_sets(
+                vulkano::pipeline::PipelineBindPoint::Graphics,
+                self.deferred_pipeline.pipeline.layout().clone(),
+                0,
+                model_set.clone(),
+            )
+            .bind_vertex_buffers(0, vertex_buffer.clone())
+            .draw(vertex_buffer.len() as u32, 1, 0, 0)
+            .unwrap();
+    }
+
+    /// Executes the ambient render stage.
+    /// * This function provides the only path out of the vertex render stage,
+    /// and must be executed before any other lighting stages.
+    pub fn ambient(&mut self) {
+        match self.render_stage {
+            RenderStage::Vertex => {
+                self.render_stage = RenderStage::Ambient;
+            }
+            RenderStage::Ambient => {
+                return;
+            }
+            RenderStage::RedrawNeeded => {
+                self.recreate_swapchain();
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+            _ => {
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+        }
+
+        let ambient_layout = self
+            .ambient_pipeline
+            .pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+        let ambient_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            ambient_layout.clone(),
+            [
+                WriteDescriptorSet::image_view(0, self.color_buffer.clone()),
+                WriteDescriptorSet::buffer(1, self.ambient_buffer.clone()),
+            ],
+        )
+        .unwrap();
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            .next_subpass(SubpassContents::Inline)
+            .unwrap()
+            .bind_pipeline_graphics(self.ambient_pipeline.pipeline.clone())
+            .bind_descriptor_sets(
+                vulkano::pipeline::PipelineBindPoint::Graphics,
+                self.ambient_pipeline.pipeline.layout().clone(),
+                0,
+                ambient_set.clone(),
+            )
+            .set_viewport(0, [self.viewport.clone()])
+            .bind_vertex_buffers(0, self.screen_vertices.clone())
+            .draw(self.screen_vertices.len() as u32, 1, 0, 0)
+            .unwrap();
+    }
+
+    pub fn set_ambient(&mut self, color: [f32; 3], intensity: f32) {
+        self.ambient_buffer = CpuAccessibleBuffer::from_data(
+            &self.memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            ambient_frag::ty::AmbientData { color, intensity },
+        )
+        .unwrap();
+    }
+
+    /// Draws a given DirectionalLight.
+    pub fn directional(&mut self, light: &DirectionalLight) {
+        match self.render_stage {
+            RenderStage::Ambient => {
+                self.render_stage = RenderStage::Directional;
+            }
+            RenderStage::Directional => {}
+            RenderStage::RedrawNeeded => {
+                self.recreate_swapchain();
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+            _ => {
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+        }
+
+        let directional_subbuffer =
+            self.generate_directional_subbuffer(&self.directional_buffer, &light);
+
+        let directional_layout = self
+            .directional_pipeline
+            .pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+        let directional_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            directional_layout.clone(),
+            [
+                WriteDescriptorSet::image_view(0, self.color_buffer.clone()),
+                WriteDescriptorSet::buffer(1, directional_subbuffer.clone()),
+            ],
+        )
+        .unwrap();
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            .set_viewport(0, [self.viewport.clone()])
+            .bind_pipeline_graphics(self.directional_pipeline.pipeline.clone())
+            .bind_vertex_buffers(0, self.screen_vertices.clone())
+            .bind_descriptor_sets(
+                vulkano::pipeline::PipelineBindPoint::Graphics,
+                self.directional_pipeline.pipeline.layout().clone(),
+                0,
+                directional_set.clone(),
+            )
+            .draw(self.screen_vertices.len() as u32, 1, 0, 0)
+            .unwrap();
+    }
+
+    fn generate_directional_subbuffer(
+        &self,
+        pool: &CpuBufferPool<directional_frag::ty::DirectionalData>,
+        light: &DirectionalLight,
+    ) -> Arc<CpuBufferPoolSubbuffer<directional_frag::ty::DirectionalData>> {
+        let uniform_data = directional_frag::ty::DirectionalData {
+            direction: light.direction.into(),
+            color: light.color.into(),
+            intensity: light.intensity.into(),
+            _dummy0: [0; 8],
+        };
+
+        pool.from_data(uniform_data).unwrap()
+    }
+
+    pub fn point(&mut self, light: &PointLight) {
+        match self.render_stage {
+            RenderStage::Ambient => {
+                self.render_stage = RenderStage::Point;
+            }
+            RenderStage::Directional => {
+                self.render_stage = RenderStage::Point;
+            }
+            RenderStage::Point => {}
+            RenderStage::RedrawNeeded => {
+                self.recreate_swapchain();
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+            _ => {
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+        }
+
+        let point_subbuffer = self.generate_point_subbuffer(&self.point_buffer, &light);
+
+        let point_layout = self
+            .point_pipeline
+            .pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+        let point_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            point_layout.clone(),
+            [
+                WriteDescriptorSet::image_view(0, self.color_buffer.clone()),
+                WriteDescriptorSet::buffer(1, point_subbuffer.clone()),
+            ],
+        )
+        .unwrap();
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            .set_viewport(0, [self.viewport.clone()])
+            .bind_pipeline_graphics(self.point_pipeline.pipeline.clone())
+            .bind_vertex_buffers(0, self.screen_vertices.clone())
+            .bind_descriptor_sets(
+                vulkano::pipeline::PipelineBindPoint::Graphics,
+                self.point_pipeline.pipeline.layout().clone(),
+                0,
+                point_set.clone(),
+            )
+            .draw(self.screen_vertices.len() as u32, 1, 0, 0)
+            .unwrap();
+    }
+
+    fn generate_point_subbuffer(
+        &self,
+        pool: &CpuBufferPool<point_frag::ty::PointData>,
+        light: &PointLight,
+    ) -> Arc<CpuBufferPoolSubbuffer<point_frag::ty::PointData>> {
+        let uniform_data = point_frag::ty::PointData {
+            position: light.position.into(),
+            color: light.color.into(),
+            intensity: light.intensity.into(),
+            _dummy0: [0; 4],
+        };
+
+        pool.from_data(uniform_data).unwrap()
+    }
+
     pub fn recreate_swapchain(&mut self) {
         let window = self
             .surface
@@ -448,6 +823,69 @@ impl Renderer {
         };
 
         self.swapchain = new_swapchain;
+    }
+
+    pub fn finish(&mut self, previous_frame_end: &mut Option<Box<dyn GpuFuture>>) {
+        match self.render_stage {
+            RenderStage::Directional => {}
+            RenderStage::Point => {}
+            RenderStage::RedrawNeeded => {
+                self.recreate_swapchain();
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+            _ => {
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+        }
+
+        let mut commands = self.commands.take().unwrap();
+        commands.end_render_pass().unwrap();
+        let command_buffer = commands.build().unwrap();
+
+        let acquire_future = self.acquire_future.take().unwrap();
+
+        let mut local_future: Option<Box<dyn GpuFuture>> =
+            Some(Box::new(vulkano::sync::now(self.device.clone())) as Box<dyn GpuFuture>);
+
+        std::mem::swap(&mut local_future, previous_frame_end);
+
+        let future = local_future
+            .take()
+            .unwrap()
+            .join(acquire_future)
+            .then_execute(self.queue.clone(), command_buffer)
+            .unwrap()
+            .then_swapchain_present(
+                self.queue.clone(),
+                SwapchainPresentInfo::swapchain_image_index(
+                    self.swapchain.clone(),
+                    self.image_index,
+                ),
+            )
+            .then_signal_fence_and_flush();
+
+        match future {
+            Ok(future) => {
+                *previous_frame_end = Some(Box::new(future) as Box<_>);
+            }
+            Err(vulkano::sync::FlushError::OutOfDate) => {
+                self.recreate_swapchain();
+                *previous_frame_end =
+                    Some(Box::new(vulkano::sync::now(self.device.clone())) as Box<_>);
+            }
+            Err(err) => {
+                println!("Failed to flush future: {:?}", err);
+                *previous_frame_end =
+                    Some(Box::new(vulkano::sync::now(self.device.clone())) as Box<_>);
+            }
+        }
+
+        self.commands = None;
+        self.render_stage = RenderStage::Stopped;
     }
 
     fn window_size_dependent_setup(
@@ -492,63 +930,3 @@ impl Renderer {
         (framebuffers, color_buffer.clone())
     }
 }
-
-// render stage allows renderer to function as state machine
-enum RenderStage {
-    Stopped,
-    Vertex,
-    Ambient,
-    Point,
-    Directional,
-    RedrawNeeded,
-}
-
-// vertex structs are used to define data contained in buffers
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
-struct Vertex2D {
-    position: [f32; 3],
-    uv: [f32; 2],
-}
-vulkano::impl_vertex!(Vertex2D, position, uv);
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
-struct BasicVertex2D {
-    position: [f32; 2],
-}
-vulkano::impl_vertex!(BasicVertex2D, position);
-
-impl BasicVertex2D {
-    pub fn screen_vertices() -> [BasicVertex2D; 6] {
-        [
-            BasicVertex2D {
-                position: [-1.0, -1.0],
-            },
-            BasicVertex2D {
-                position: [-1.0, 1.0],
-            },
-            BasicVertex2D {
-                position: [1.0, 1.0],
-            },
-            BasicVertex2D {
-                position: [-1.0, -1.0],
-            },
-            BasicVertex2D {
-                position: [1.0, 1.0],
-            },
-            BasicVertex2D {
-                position: [1.0, -1.0],
-            },
-        ]
-    }
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
-struct ColorVertex2D {
-    position: [f32; 3],
-    color: [f32; 3],
-}
-vulkano::impl_vertex!(ColorVertex2D, position, color);
