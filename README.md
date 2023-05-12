@@ -1,5 +1,7 @@
 # Flintlock
 
+[![Rust](https://github.com/joepigott/flintlock-2D/actions/workflows/rust.yml/badge.svg)](https://github.com/joepigott/flintlock-2D/actions/workflows/rust.yml)
+
 Flintlock is a 2D renderer written in Rust, using the 
 [vulkano](https://github.com/vulkano-rs/vulkano) Vulkan bindings. The goal is 
 to create a simple 2D renderer and level editor for creating games.
