@@ -13,6 +13,5 @@ list will likely change as I find things that would be convenient.
 ---
 
 Current status:
-Rendering system is mostly implemented (I think). For some reason, 
-`swapchain::acquire_next_image` is timing out, so I think swapchain
-creation has gone bad somewhere.
+Rendering colored triangles and quads (anything that implements 
+`ColoredRenderable`) is now possible. Working on texturing.
