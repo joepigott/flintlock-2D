@@ -1,11 +1,12 @@
 use super::vertices::*;
 
-use nalgebra_glm::TMat4;
+use nalgebra_glm::{TMat4, Vec3, translate, rotate};
 
 /// Quad with texture data.
 pub struct Quad {
     pub vertices: [Vertex2D; 6],
-    pub matrix: TMat4<f32>,
+    pub translation: TMat4<f32>,
+    pub rotation: TMat4<f32>
 }
 
 impl super::Renderable for Quad {
@@ -14,14 +15,23 @@ impl super::Renderable for Quad {
     }
 
     fn matrix(&self) -> TMat4<f32> {
-        self.matrix
+        self.translation * self.rotation
+    }
+
+    fn translate(&mut self, translation: Vec3) {
+        self.translation = translate(&self.translation, &translation);
+    }
+
+    fn rotate(&mut self, radians: f32, axis: Vec3) {
+        self.rotation = rotate(&self.rotation, radians, &axis);
     }
 }
 
 /// Quad with color data. No texture data.
 pub struct ColorQuad {
     pub vertices: [ColorVertex2D; 6],
-    pub matrix: TMat4<f32>,
+    pub translation: TMat4<f32>,
+    pub rotation: TMat4<f32>
 }
 
 impl super::ColorRenderable for ColorQuad {
@@ -30,6 +40,14 @@ impl super::ColorRenderable for ColorQuad {
     }
 
     fn matrix(&self) -> TMat4<f32> {
-        self.matrix
+        self.translation * self.rotation
+    }
+
+    fn translate(&mut self, translation: Vec3) {
+        self.translation = translate(&self.translation, &translation);
+    }
+
+    fn rotate(&mut self, radians: f32, axis: Vec3) {
+        self.rotation = rotate(&self.rotation, radians, &axis);
     }
 }

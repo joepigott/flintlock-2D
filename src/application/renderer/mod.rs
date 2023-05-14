@@ -1,3 +1,7 @@
+// This file contains code copied and/or adapted from code provided by the
+// Vulkano project and the Vulkano tutorial by GitHub user taidaesal, both 
+// under the MIT license.
+
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
@@ -35,6 +39,8 @@ use winit::window::{Window, WindowBuilder};
 // VkSurfaceBuild allows winit to build a vulkan surface directly
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 
+use nalgebra_glm::{identity, TMat4, perspective, half_pi};
+
 use std::sync::Arc;
 
 mod shaders;
@@ -54,10 +60,25 @@ enum RenderStage {
     RedrawNeeded,
 }
 
+struct VP {
+    view: TMat4<f32>,
+    projection: TMat4<f32>
+}
+
+impl VP {
+    fn new() -> VP {
+        VP {
+            view: identity(),
+            projection: identity()
+        }
+    }
+}
+
 pub struct Renderer {
     surface: Arc<Surface>,
     pub device: Arc<Device>,
     queue: Arc<Queue>,
+    vp: VP,
     swapchain: Arc<Swapchain>,
     memory_allocator: Arc<StandardMemoryAllocator>,
     descriptor_set_allocator: StandardDescriptorSetAllocator,
@@ -67,11 +88,13 @@ pub struct Renderer {
     ambient_pipeline: PipelineInfo,
     point_pipeline: PipelineInfo,
     directional_pipeline: PipelineInfo,
+    vp_buffer: Arc<CpuAccessibleBuffer<deferred_vert::ty::VPData>>,
     model_uniform_buffer: CpuBufferPool<deferred_vert::ty::ModelData>,
     ambient_buffer: Arc<CpuAccessibleBuffer<ambient_frag::ty::AmbientData>>,
     point_buffer: CpuBufferPool<point_frag::ty::PointData>,
     directional_buffer: CpuBufferPool<directional_frag::ty::DirectionalData>,
     screen_vertices: Arc<CpuAccessibleBuffer<[BasicVertex2D]>>,
+    vp_set: Arc<PersistentDescriptorSet>,
     viewport: Viewport,
     framebuffers: Vec<Arc<Framebuffer>>,
     color_buffer: Arc<ImageView<AttachmentImage>>,
@@ -162,6 +185,8 @@ impl Renderer {
 
         let queue = queues.next().unwrap();
 
+        let mut vp = VP::new();
+
         let (swapchain, images) = {
             let caps = device
                 .physical_device()
@@ -181,6 +206,17 @@ impl Renderer {
 
             let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
             let image_extent: [u32; 2] = window.inner_size().into();
+
+            // let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
+            // vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 100.0);
+            vp.projection = nalgebra_glm::ortho(
+                -0.0025 * image_extent[0] as f32,
+                0.0025  * image_extent[0] as f32,
+                -0.0025 * image_extent[1] as f32,
+                0.0025  * image_extent[1] as f32,
+                -100.0,
+                100.0
+            );
 
             Swapchain::new(
                 device.clone(),
@@ -358,6 +394,20 @@ impl Renderer {
         };
 
         // buffers
+        
+        let vp_buffer = CpuAccessibleBuffer::from_data(
+            &memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            deferred_vert::ty::VPData {
+                view: vp.view.into(),
+                projection: vp.projection.into()
+            }
+        )
+        .unwrap();
 
         let model_uniform_buffer: CpuBufferPool<deferred_vert::ty::ModelData> =
             CpuBufferPool::uniform_buffer(memory_allocator.clone());
@@ -395,6 +445,18 @@ impl Renderer {
         )
         .unwrap();
 
+        let vp_layout = deferred_pipeline.pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+        let vp_set = PersistentDescriptorSet::new(
+            &descriptor_set_allocator,
+            vp_layout.clone(),
+            [WriteDescriptorSet::buffer(0, vp_buffer.clone())]
+        )
+        .unwrap();
+
         let mut viewport = Viewport {
             origin: [0.0, 0.0],
             dimensions: [0.0, 0.0],
@@ -418,6 +480,7 @@ impl Renderer {
             surface,
             device,
             queue,
+            vp,
             swapchain,
             memory_allocator,
             descriptor_set_allocator,
@@ -427,11 +490,13 @@ impl Renderer {
             ambient_pipeline,
             point_pipeline,
             directional_pipeline,
+            vp_buffer,
             model_uniform_buffer,
             ambient_buffer,
             point_buffer,
             directional_buffer,
             screen_vertices,
+            vp_set,
             viewport,
             framebuffers,
             color_buffer,
@@ -479,8 +544,8 @@ impl Renderer {
         }
 
         let clear_values = vec![
-            Some([0.15, 0.15, 0.15, 1.0].into()),
-            Some([0.15, 0.15, 0.15, 1.0].into()),
+            Some([0.05, 0.05, 0.05, 1.0].into()),
+            Some([0.05, 0.05, 0.05, 1.0].into()),
             Some(1.0.into()),
         ];
 
@@ -568,7 +633,7 @@ impl Renderer {
                 vulkano::pipeline::PipelineBindPoint::Graphics,
                 self.deferred_pipeline.pipeline.layout().clone(),
                 0,
-                model_set.clone(),
+                (self.vp_set.clone(), model_set.clone())
             )
             .bind_vertex_buffers(0, vertex_buffer.clone())
             .draw(vertex_buffer.len() as u32, 1, 0, 0)
@@ -633,7 +698,7 @@ impl Renderer {
                 vulkano::pipeline::PipelineBindPoint::Graphics,
                 self.deferred_pipeline.pipeline.layout().clone(),
                 0,
-                model_set.clone(),
+                (self.vp_set.clone(), model_set.clone())
             )
             .bind_vertex_buffers(0, vertex_buffer.clone())
             .draw(vertex_buffer.len() as u32, 1, 0, 0)
@@ -842,6 +907,37 @@ impl Renderer {
             .unwrap();
     }
 
+    pub fn set_view(&mut self, view: &TMat4<f32>) {
+        self.vp.view = view.clone();
+        self.vp_buffer = CpuAccessibleBuffer::from_data(
+            &self.memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            deferred_vert::ty::VPData {
+                view: self.vp.view.clone().into(),
+                projection: self.vp.projection.clone().into()
+            }
+        )
+        .unwrap();
+
+        let vp_layout = self.deferred_pipeline.pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+        self.vp_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            vp_layout.clone(),
+            [WriteDescriptorSet::buffer(0, self.vp_buffer.clone())]
+        )
+        .unwrap();
+
+        self.render_stage = RenderStage::Stopped;
+    }
+
     pub fn recreate_swapchain(&mut self) {
         self.render_stage = RenderStage::RedrawNeeded;
         self.commands = None;
@@ -854,7 +950,16 @@ impl Renderer {
             .unwrap();
         let image_extent: [u32; 2] = window.inner_size().into();
 
-        let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
+        // let aspect_ratio = image_extent[0] as f32 / image_extent[1] as f32;
+        // self.vp.projection = perspective(aspect_ratio, half_pi(), 0.01, 100.0);
+        self.vp.projection = nalgebra_glm::ortho(
+            -0.0025 * image_extent[0] as f32,
+            0.0025  * image_extent[0] as f32,
+            -0.0025 * image_extent[1] as f32,
+            0.0025  * image_extent[1] as f32,
+            -100.0,
+            100.0
+        );
 
         let (new_swapchain, new_images) = match self.swapchain.recreate(SwapchainCreateInfo {
             image_extent,
@@ -875,6 +980,32 @@ impl Renderer {
         self.swapchain = new_swapchain;
         self.framebuffers = new_framebuffers;
         self.color_buffer = new_color_buffer;
+
+        self.vp_buffer = CpuAccessibleBuffer::from_data(
+            &self.memory_allocator,
+            BufferUsage {
+                uniform_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            deferred_vert::ty::VPData {
+                view: self.vp.view.into(),
+                projection: self.vp.projection.into()
+            }
+        )
+        .unwrap();
+
+        let vp_layout = self.deferred_pipeline.pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
+            .unwrap();
+        self.vp_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            vp_layout.clone(),
+            [WriteDescriptorSet::buffer(0, self.vp_buffer.clone())]
+        )
+        .unwrap();
 
         self.render_stage = RenderStage::Stopped;
     }
