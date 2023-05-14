@@ -8,6 +8,10 @@ layout(set = 0, binding = 1) uniform DirectionalData {
     float intensity;
 } directional;
 
-void main() {
+layout(location = 0) out vec4 f_color;
 
+void main() {
+    vec3 result_color = subpassLoad(u_color).rgb;
+    vec3 directional_color = directional.color * directional.intensity;
+    f_color = vec4(result_color, 1.0);
 }

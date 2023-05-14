@@ -1,6 +1,3 @@
-#![allow(dead_code, unused)]
-
-use vulkano::buffer::cpu_pool::CpuBufferPoolSubbuffer;
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
@@ -9,15 +6,12 @@ use vulkano::command_buffer::{
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::physical::PhysicalDeviceType;
-use vulkano::device::{
-    Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
-};
+use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo};
 use vulkano::format::Format;
 use vulkano::image::view::ImageView;
 use vulkano::image::{AttachmentImage, ImageAccess, SwapchainImage};
 use vulkano::instance::{Instance, InstanceCreateInfo};
-use vulkano::memory::allocator::MemoryUsage;
-use vulkano::memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator};
+use vulkano::memory::allocator::StandardMemoryAllocator;
 use vulkano::pipeline::graphics::color_blend::{
     AttachmentBlend, BlendFactor, BlendOp, ColorBlendState,
 };
@@ -41,18 +35,13 @@ use winit::window::{Window, WindowBuilder};
 // VkSurfaceBuild allows winit to build a vulkan surface directly
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 
-use bytemuck::{Pod, Zeroable};
-
-use std::io::Cursor;
 use std::sync::Arc;
 
 mod shaders;
 use shaders::*;
 
-mod renderables;
+pub mod renderables;
 use renderables::lights::*;
-use renderables::quad::*;
-use renderables::triangle::*;
 use renderables::vertices::*;
 
 // render stage allows renderer to function as state machine
@@ -475,14 +464,13 @@ impl Renderer {
         let (image_index, suboptimal, acquire_future) =
             match swapchain::acquire_next_image(self.swapchain.clone(), None) {
                 Ok(r) => r,
-                Err(AcquireError::Timeout) => {
-                    panic!("Timeout: \n{:?}", self.swapchain);
-                }
                 Err(AcquireError::OutOfDate) => {
                     self.recreate_swapchain();
                     return;
                 }
-                Err(err) => panic!("{:?}", err),
+                Err(err) => {
+                    panic!("{}", err);
+                }
             };
 
         if suboptimal {
@@ -552,6 +540,71 @@ impl Renderer {
             .layout()
             .set_layouts()
             .get(1)
+            .unwrap();
+        let model_set = PersistentDescriptorSet::new(
+            &self.descriptor_set_allocator,
+            model_layout.clone(),
+            [WriteDescriptorSet::buffer(0, model_subbuffer.clone())],
+        )
+        .unwrap();
+
+        let vertex_buffer = CpuAccessibleBuffer::from_iter(
+            &self.memory_allocator,
+            BufferUsage {
+                vertex_buffer: true,
+                ..BufferUsage::empty()
+            },
+            false,
+            model.vertices().iter().cloned(),
+        )
+        .unwrap();
+
+        self.commands
+            .as_mut()
+            .unwrap()
+            .set_viewport(0, [self.viewport.clone()])
+            .bind_pipeline_graphics(self.deferred_pipeline.pipeline.clone())
+            .bind_descriptor_sets(
+                vulkano::pipeline::PipelineBindPoint::Graphics,
+                self.deferred_pipeline.pipeline.layout().clone(),
+                0,
+                model_set.clone(),
+            )
+            .bind_vertex_buffers(0, vertex_buffer.clone())
+            .draw(vertex_buffer.len() as u32, 1, 0, 0)
+            .unwrap();
+    }
+
+    pub fn color_draw(&mut self, model: &dyn renderables::ColorRenderable) {
+        match self.render_stage {
+            RenderStage::Vertex => {}
+            RenderStage::RedrawNeeded => {
+                self.recreate_swapchain();
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+            _ => {
+                self.commands = None;
+                self.render_stage = RenderStage::Stopped;
+                return;
+            }
+        }
+
+        let model_subbuffer = {
+            let uniform_data = deferred_vert::ty::ModelData {
+                mat: model.matrix().into(),
+            };
+
+            self.model_uniform_buffer.from_data(uniform_data).unwrap()
+        };
+
+        let model_layout = self
+            .deferred_pipeline
+            .pipeline
+            .layout()
+            .set_layouts()
+            .get(0)
             .unwrap();
         let model_set = PersistentDescriptorSet::new(
             &self.descriptor_set_allocator,
@@ -679,8 +732,16 @@ impl Renderer {
             }
         }
 
-        let directional_subbuffer =
-            self.generate_directional_subbuffer(&self.directional_buffer, &light);
+        let directional_subbuffer = {
+            let uniform_data = directional_frag::ty::DirectionalData {
+                direction: light.direction.into(),
+                color: light.color.into(),
+                intensity: light.intensity.into(),
+                _dummy0: [0; 8],
+            };
+
+            self.directional_buffer.from_data(uniform_data).unwrap()
+        };
 
         let directional_layout = self
             .directional_pipeline
@@ -715,21 +776,6 @@ impl Renderer {
             .unwrap();
     }
 
-    fn generate_directional_subbuffer(
-        &self,
-        pool: &CpuBufferPool<directional_frag::ty::DirectionalData>,
-        light: &DirectionalLight,
-    ) -> Arc<CpuBufferPoolSubbuffer<directional_frag::ty::DirectionalData>> {
-        let uniform_data = directional_frag::ty::DirectionalData {
-            direction: light.direction.into(),
-            color: light.color.into(),
-            intensity: light.intensity.into(),
-            _dummy0: [0; 8],
-        };
-
-        pool.from_data(uniform_data).unwrap()
-    }
-
     pub fn point(&mut self, light: &PointLight) {
         match self.render_stage {
             RenderStage::Ambient => {
@@ -752,7 +798,16 @@ impl Renderer {
             }
         }
 
-        let point_subbuffer = self.generate_point_subbuffer(&self.point_buffer, &light);
+        let point_subbuffer = {
+            let uniform_data = point_frag::ty::PointData {
+                position: light.position.into(),
+                color: light.color.into(),
+                intensity: light.intensity.into(),
+                _dummy0: [0; 4],
+            };
+
+            self.point_buffer.from_data(uniform_data).unwrap()
+        };
 
         let point_layout = self
             .point_pipeline
@@ -787,22 +842,10 @@ impl Renderer {
             .unwrap();
     }
 
-    fn generate_point_subbuffer(
-        &self,
-        pool: &CpuBufferPool<point_frag::ty::PointData>,
-        light: &PointLight,
-    ) -> Arc<CpuBufferPoolSubbuffer<point_frag::ty::PointData>> {
-        let uniform_data = point_frag::ty::PointData {
-            position: light.position.into(),
-            color: light.color.into(),
-            intensity: light.intensity.into(),
-            _dummy0: [0; 4],
-        };
-
-        pool.from_data(uniform_data).unwrap()
-    }
-
     pub fn recreate_swapchain(&mut self) {
+        self.render_stage = RenderStage::RedrawNeeded;
+        self.commands = None;
+
         let window = self
             .surface
             .object()
@@ -822,7 +865,18 @@ impl Renderer {
             Err(err) => panic!("Failed to recreate swapchain: {:?}", err),
         };
 
+        let (new_framebuffers, new_color_buffer) = Renderer::window_size_dependent_setup(
+            &self.memory_allocator,
+            &new_images,
+            self.render_pass.clone(),
+            &mut self.viewport,
+        );
+
         self.swapchain = new_swapchain;
+        self.framebuffers = new_framebuffers;
+        self.color_buffer = new_color_buffer;
+
+        self.render_stage = RenderStage::Stopped;
     }
 
     pub fn finish(&mut self, previous_frame_end: &mut Option<Box<dyn GpuFuture>>) {

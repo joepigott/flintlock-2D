@@ -3,8 +3,8 @@ use bytemuck::{Pod, Zeroable};
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct Vertex2D {
-    position: [f32; 3],
-    uv: [f32; 2],
+    pub position: [f32; 3],
+    pub uv: [f32; 2],
 }
 vulkano::impl_vertex!(Vertex2D, position, uv);
 
@@ -43,7 +43,7 @@ impl BasicVertex2D {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 pub struct ColorVertex2D {
-    position: [f32; 3],
-    color: [f32; 3],
+    pub position: [f32; 3],
+    pub color: [f32; 3],
 }
 vulkano::impl_vertex!(ColorVertex2D, position, color);

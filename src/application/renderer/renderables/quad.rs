@@ -4,8 +4,8 @@ use nalgebra_glm::TMat4;
 
 /// Quad with texture data.
 pub struct Quad {
-    vertices: [Vertex2D; 6],
-    matrix: TMat4<f32>,
+    pub vertices: [Vertex2D; 6],
+    pub matrix: TMat4<f32>,
 }
 
 impl super::Renderable for Quad {
@@ -20,8 +20,8 @@ impl super::Renderable for Quad {
 
 /// Quad with color data. No texture data.
 pub struct ColorQuad {
-    vertices: [ColorVertex2D; 6],
-    matrix: TMat4<f32>,
+    pub vertices: [ColorVertex2D; 6],
+    pub matrix: TMat4<f32>,
 }
 
 impl super::ColorRenderable for ColorQuad {

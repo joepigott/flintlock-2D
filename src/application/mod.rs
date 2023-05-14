@@ -1,7 +1,11 @@
 mod renderer;
+use renderer::renderables::lights::{DirectionalLight, PointLight};
+use renderer::renderables::quad::ColorQuad;
+use renderer::renderables::triangle::ColorTriangle;
+use renderer::renderables::vertices::ColorVertex2D;
 use renderer::Renderer;
 
-use vulkano::sync::GpuFuture;
+use vulkano::sync::{self, GpuFuture};
 
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -24,7 +28,68 @@ impl Application {
 
     pub fn run(mut self) {
         let mut previous_frame_end =
-            Some(Box::new(vulkano::sync::now(self.renderer.device.clone())) as Box<dyn GpuFuture>);
+            Some(Box::new(sync::now(self.renderer.device.clone())) as Box<dyn GpuFuture>);
+
+        // just for testing
+        // let quad = ColorQuad {
+        //     vertices: [
+        //         ColorVertex2D {
+        //             position: [-1.0, -1.0, 1.0],
+        //             color: [1.0, 1.0, 1.0]
+        //         },
+        //         ColorVertex2D {
+        //             position: [-1.0, 1.0, 1.0],
+        //             color: [1.0, 1.0, 1.0]
+        //         },
+        //         ColorVertex2D {
+        //             position: [1.0, 1.0, 1.0],
+        //             color: [1.0, 1.0, 1.0]
+        //         },
+        //         ColorVertex2D {
+        //             position: [-1.0, -1.0, 1.0],
+        //             color: [1.0, 1.0, 1.0]
+        //         },
+        //         ColorVertex2D {
+        //             position: [1.0, 1.0, 1.0],
+        //             color: [1.0, 1.0, 1.0]
+        //         },
+        //         ColorVertex2D {
+        //             position: [1.0, -1.0, 1.0],
+        //             color: [1.0, 1.0, 1.0]
+        //         }
+        //     ],
+        //     matrix: nalgebra_glm::identity()
+        // };
+
+        let triangle = ColorTriangle {
+            vertices: [
+                ColorVertex2D {
+                    position: [-0.5, 0.5, 0.0],
+                    color: [1.0, 0.0, 0.0],
+                },
+                ColorVertex2D {
+                    position: [0.5, 0.5, 0.0],
+                    color: [0.0, 1.0, 0.0],
+                },
+                ColorVertex2D {
+                    position: [0.0, -0.5, 0.0],
+                    color: [0.0, 0.0, 1.0],
+                },
+            ],
+            matrix: nalgebra_glm::identity(),
+        };
+
+        let dir_light = DirectionalLight {
+            direction: [-1.0, 1.0],
+            color: [1.0, 1.0, 1.0],
+            intensity: 0.5,
+        };
+
+        let point_light = PointLight {
+            position: [0.0, 0.0, 0.0],
+            color: [1.0, 1.0, 1.0],
+            intensity: 0.5,
+        };
 
         self.event_loop
             .run(move |event, _, control_flow| match event {
@@ -48,6 +113,10 @@ impl Application {
                         .cleanup_finished();
 
                     self.renderer.start();
+                    self.renderer.color_draw(&triangle);
+                    self.renderer.ambient();
+                    self.renderer.directional(&dir_light);
+                    self.renderer.point(&point_light);
                     self.renderer.finish(&mut previous_frame_end);
                 }
                 _ => {}

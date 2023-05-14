@@ -4,8 +4,8 @@ use nalgebra_glm::TMat4;
 
 /// Triangle with texture data.
 pub struct Triangle {
-    vertices: [Vertex2D; 3],
-    matrix: TMat4<f32>,
+    pub vertices: [Vertex2D; 3],
+    pub matrix: TMat4<f32>,
 }
 
 impl super::Renderable for Triangle {
@@ -20,8 +20,8 @@ impl super::Renderable for Triangle {
 
 /// Triangle with color data. No texture data.
 pub struct ColorTriangle {
-    vertices: [ColorVertex2D; 3],
-    matrix: TMat4<f32>,
+    pub vertices: [ColorVertex2D; 3],
+    pub matrix: TMat4<f32>,
 }
 
 impl super::ColorRenderable for ColorTriangle {
