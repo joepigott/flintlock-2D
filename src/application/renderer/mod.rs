@@ -1,6 +1,9 @@
 // This file contains code copied and/or adapted from code provided by the
 // Vulkano project and the Vulkano tutorial by GitHub user taidaesal, both 
 // under the MIT license.
+//
+// Vulkano => https://vulkano.rs
+// Vulkano Tutorial => https://github.com/taidaesal/vulkano_tutorial
 
 use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, CpuBufferPool, TypedBufferAccess};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
@@ -544,8 +547,8 @@ impl Renderer {
         }
 
         let clear_values = vec![
-            Some([0.05, 0.05, 0.05, 1.0].into()),
-            Some([0.05, 0.05, 0.05, 1.0].into()),
+            Some([0.01098, 0.01059, 0.00902, 1.0].into()),
+            Some([0.01098, 0.01059, 0.00902, 1.0].into()),
             Some(1.0.into()),
         ];
 
@@ -1010,7 +1013,7 @@ impl Renderer {
         self.render_stage = RenderStage::Stopped;
     }
 
-    pub fn finish(&mut self, previous_frame_end: &mut Option<Box<dyn GpuFuture>>) {
+    pub fn render(&mut self, previous_frame_end: &mut Option<Box<dyn GpuFuture>>) {
         match self.render_stage {
             RenderStage::Directional => {}
             RenderStage::Point => {}

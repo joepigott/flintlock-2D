@@ -1,6 +1,6 @@
 use super::vertices::*;
 
-use nalgebra_glm::{TMat4, Vec3, translate, rotate};
+use nalgebra_glm::{TMat4, Vec3, translate, rotate_normalized_axis};
 
 /// Triangle with texture data.
 pub struct Triangle {
@@ -23,7 +23,11 @@ impl super::Renderable for Triangle {
     }
 
     fn rotate(&mut self, radians: f32, axis: Vec3) {
-        self.rotation = rotate(&self.rotation, radians, &axis);
+        self.rotation = rotate_normalized_axis(&self.rotation, radians, &axis);
+    }
+
+    fn reset_rotation(&mut self) {
+        self.rotation = nalgebra_glm::identity();
     }
 }
 
@@ -48,6 +52,10 @@ impl super::ColorRenderable for ColorTriangle {
     }
 
     fn rotate(&mut self, radians: f32, axis: Vec3) {
-        self.rotation = rotate(&self.rotation, radians, &axis);
+        self.rotation = rotate_normalized_axis(&self.rotation, radians, &axis);
+    }
+
+    fn reset_rotation(&mut self) {
+        self.rotation = nalgebra_glm::identity();
     }
 }

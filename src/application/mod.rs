@@ -36,7 +36,7 @@ impl Application {
         let time_start = std::time::Instant::now();
 
         // just for testing
-        let quad = ColorQuad {
+        let mut quad = ColorQuad {
             vertices: [
                 ColorVertex2D {
                     position: [-1.0, -1.0, -1.6],
@@ -63,7 +63,8 @@ impl Application {
                     color: [0.0, 1.0, 0.0]
                 }
             ],
-            matrix: nalgebra_glm::identity()
+            translation: nalgebra_glm::identity(),
+            rotation: nalgebra_glm::identity()
         };
 
         let mut triangle = ColorTriangle {
@@ -81,7 +82,8 @@ impl Application {
                     color: [0.0, 0.0, 1.0],
                 },
             ],
-            matrix: nalgebra_glm::identity(),
+            translation: nalgebra_glm::identity(),
+            rotation: nalgebra_glm::identity()
         };
 
         let dir_light = DirectionalLight {
@@ -130,8 +132,15 @@ impl Application {
                         / 1_000_000_000.0;
                     let rads = elapsed * nalgebra_glm::pi::<f64>() / 180.0;
 
+                    triangle.reset_rotation();
                     triangle.rotate(
-                        rads as f32 * 50.0,
+                        rads as f32 * 50.0, 
+                        vec3(0.0, 0.0, 1.0)
+                    );
+
+                    quad.reset_rotation();
+                    quad.rotate(
+                        rads as f32 * 10.0,
                         vec3(0.0, 0.0, 1.0)
                     );
 
@@ -141,7 +150,7 @@ impl Application {
                     self.renderer.ambient();
                     self.renderer.directional(&dir_light);
                     self.renderer.point(&point_light);
-                    self.renderer.finish(&mut previous_frame_end);
+                    self.renderer.render(&mut previous_frame_end);
                 }
                 _ => {}
             });

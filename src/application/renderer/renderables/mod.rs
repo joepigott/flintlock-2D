@@ -10,6 +10,7 @@ pub trait Renderable {
     fn matrix(&self) -> TMat4<f32>;
     fn translate(&mut self, translation: Vec3);
     fn rotate(&mut self, radians: f32, axis: Vec3);
+    fn reset_rotation(&mut self);
 }
 
 pub trait ColorRenderable {
@@ -17,4 +18,5 @@ pub trait ColorRenderable {
     fn matrix(&self) -> TMat4<f32>;
     fn translate(&mut self, translation: Vec3);
     fn rotate(&mut self, radians: f32, axis: Vec3);
+    fn reset_rotation(&mut self);
 }

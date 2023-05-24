@@ -25,6 +25,10 @@ impl super::Renderable for Quad {
     fn rotate(&mut self, radians: f32, axis: Vec3) {
         self.rotation = rotate(&self.rotation, radians, &axis);
     }
+
+    fn reset_rotation(&mut self) {
+        self.rotation = nalgebra_glm::identity();
+    }
 }
 
 /// Quad with color data. No texture data.
@@ -49,5 +53,9 @@ impl super::ColorRenderable for ColorQuad {
 
     fn rotate(&mut self, radians: f32, axis: Vec3) {
         self.rotation = rotate(&self.rotation, radians, &axis);
+    }
+
+    fn reset_rotation(&mut self) {
+        self.rotation = nalgebra_glm::identity();
     }
 }
