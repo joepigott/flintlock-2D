@@ -13,5 +13,5 @@ list will likely change as I find things that would be convenient.
 ---
 
 Current status:
-Rendering colored triangles and quads (anything that implements 
-`ColoredRenderable`) is now possible. Working on texturing.
+It's possible to render an arbitrary number of primitives, but only those that implement `ColorRenderable`.
+Textured primitives are being worked on.
