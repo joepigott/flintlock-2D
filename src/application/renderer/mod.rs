@@ -236,8 +236,6 @@ impl Renderer {
             .unwrap()
         };
 
-        println!("{}", images.len());
-
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
         let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
         let command_buffer_allocator =

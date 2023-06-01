@@ -138,11 +138,11 @@ impl Application {
                         vec3(0.0, 0.0, 1.0)
                     );
 
-                    quad.reset_rotation();
-                    quad.rotate(
-                        rads as f32 * 10.0,
-                        vec3(0.0, 0.0, 1.0)
-                    );
+                    let x = f32::cos(rads as f32 * 10.0);
+                    let y = f32::sin(rads as f32 * 10.0);
+
+                    quad.translation = nalgebra_glm::identity();
+                    quad.translate(vec3(x, y, 0.0));
 
                     self.renderer.start();
                     self.renderer.color_draw(&quad);
