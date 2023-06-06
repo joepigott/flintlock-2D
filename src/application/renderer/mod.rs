@@ -42,7 +42,7 @@ use winit::window::{Window, WindowBuilder};
 // VkSurfaceBuild allows winit to build a vulkan surface directly
 use vulkano_win::{required_extensions, VkSurfaceBuild};
 
-use nalgebra_glm::{identity, TMat4, perspective, half_pi};
+use nalgebra_glm::{identity, TMat4};
 
 use std::sync::Arc;
 
